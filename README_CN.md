@@ -8,8 +8,13 @@
 [![Twitter](https://img.shields.io/badge/Weibo-@李昊_____-orange.svg?style=flat)](http://weibo.com/5120522686/profile?rightmod=1&wvr=6&mod=personinfo&is_all=1)
 [![Chat Gitter.im](https://badges.gitter.im/ESTabBarController/Lobby.svg)](https://gitter.im/ESTabBarController/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
-
 ### [For English](README.md)
+
+**注意：**
+
+**基于eggswift/ESTabBarController解决iOS27兼容问题，以及Example适配Xcode27。**
+
+
 
 **ESTabBarController**是一个高度自定义的TabBarController组件，继承自UITabBarController。
 

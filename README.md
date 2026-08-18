@@ -10,6 +10,12 @@
 
 ### [中文介绍](README_CN.md)
 
+**Notice:**
+
+**Solving iOS 27 compatibility issues using eggswift/ESTabBarController, and providing an example for Xcode 27 adaptation.**
+
+
+
 **ESTabBarController** is a highly customizable TabBarController component, which is inherited from UITabBarController.
 
 ### Why?
