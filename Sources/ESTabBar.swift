@@ -96,6 +96,17 @@ open class ESTabBar: UITabBar {
     
     /// tabBar中items布局偏移量
     public var itemEdgeInsets = UIEdgeInsets.zero
+    /// 是否开启液态玻璃效果，默认为 true。若为 false 则禁用液态玻璃效果并使用经典 TabBar 样式。
+    /// Whether liquid glass effect is enabled, default is true. If false, liquid glass effect is disabled and classic TabBar style is used.
+    open var isLiquidGlassEnabled: Bool = true {
+        didSet {
+            if oldValue != isLiquidGlassEnabled {
+                self.updateLiquidGlassEffect()
+                self.setNeedsLayout()
+                self.layoutIfNeeded()
+            }
+        }
+    }
     /// 是否设置为自定义布局方式，默认为空。如果为空，则通过itemPositioning属性来设置。如果不为空则忽略itemPositioning,所以当tabBar的itemCustomPositioning属性不为空时，如果想改变布局规则，请设置此属性而非itemPositioning。
     public var itemCustomPositioning: ESTabBarItemPositioning? {
         didSet {
@@ -116,6 +127,10 @@ open class ESTabBar: UITabBar {
     }
     /// tabBar自定义item的容器view
     internal var containers = [ESTabBarItemContainer]()
+    /// 缓存当前选中的 index
+    internal var selectedIndex: Int = 0
+    /// 缓存当前选中的 item
+    internal var customSelectedItem: UITabBarItem?
     /// 缓存当前tabBarController用来判断是否存在"More"Tab
     internal weak var tabBarController: UITabBarController?
     /// 自定义'More'按钮样式，继承自ESTabBarItemContentView
@@ -157,6 +172,49 @@ open class ESTabBar: UITabBar {
         self.updateLayout()
     }
     
+    open override func didAddSubview(_ subview: UIView) {
+        super.didAddSubview(subview)
+        if !isLiquidGlassEnabled {
+            updateLiquidGlassEffect()
+        }
+    }
+
+    open override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if !isLiquidGlassEnabled {
+            guard self.isUserInteractionEnabled, !self.isHidden, self.alpha > 0.01 else {
+                return nil
+            }
+            // Route touches only to containers when liquid glass is disabled
+            for container in containers {
+                let converted = self.convert(point, to: container)
+                if container.point(inside: converted, with: event) {
+                    if let hit = container.hitTest(converted, with: event) {
+                        return hit
+                    }
+                }
+            }
+            // Check non-system custom subviews
+            for subview in subviews.reversed() {
+                if subview is ESTabBarItemContainer { continue }
+                let className = NSStringFromClass(type(of: subview))
+                if className.contains("Platter") || className.contains("Liquid") || className.contains("Lens") || className.contains("Button") || className.contains("Selection") {
+                    continue
+                }
+                let converted = self.convert(point, to: subview)
+                if subview.point(inside: converted, with: event) {
+                    if let hit = subview.hitTest(converted, with: event) {
+                        return hit
+                    }
+                }
+            }
+            if self.point(inside: point, with: event) {
+                return self
+            }
+            return nil
+        }
+        return super.hitTest(point, with: event)
+    }
+
     open override func sizeThatFits(_ size: CGSize) -> CGSize {
         let defaultSize = super.sizeThatFits(size)
         if let tabBarHeight, tabBarHeight > 0{
@@ -226,11 +284,39 @@ internal extension ESTabBar /* Layout */ {
         return groups.first ?? []
     }
     
+    private func updateLiquidGlassEffect() {
+        func processView(_ view: UIView) {
+            let className = NSStringFromClass(type(of: view))
+            if className.contains("Platter") || className.contains("Liquid") || className.contains("Lens") || className.contains("TabSelection") || className.contains("ClearGlass") || className.contains("DestOut") {
+                view.isHidden = !isLiquidGlassEnabled
+                view.alpha = isLiquidGlassEnabled ? 1.0 : 0.0
+                view.isUserInteractionEnabled = isLiquidGlassEnabled
+                if !isLiquidGlassEnabled {
+                    view.layer.opacity = 0.0
+                    view.layer.isHidden = true
+                    view.gestureRecognizers?.forEach { $0.isEnabled = false }
+                } else {
+                    view.layer.opacity = 1.0
+                    view.layer.isHidden = false
+                    view.gestureRecognizers?.forEach { $0.isEnabled = true }
+                }
+            }
+            for subview in view.subviews {
+                if !(subview is ESTabBarItemContainer) {
+                    processView(subview)
+                }
+            }
+        }
+        processView(self)
+    }
+
     func updateLayout() {
         guard let tabBarItems = self.items else {
             ESTabBarController.printError("empty items")
             return
         }
+        
+        updateLiquidGlassEffect()
         
         let buttonGroups = findSystemButtonGroups()
         
@@ -273,9 +359,18 @@ internal extension ESTabBar /* Layout */ {
         
         if layoutBaseSystem {
             // System itemPositioning
-            let refButtons = findReferenceSystemButtons(from: buttonGroups)
+            let refButtons = isLiquidGlassEnabled ? findReferenceSystemButtons(from: buttonGroups) : []
             let width = bounds.size.width - itemEdgeInsets.left - itemEdgeInsets.right
-            let height = bounds.size.height - itemEdgeInsets.top - itemEdgeInsets.bottom
+            let availableHeight = bounds.size.height - itemEdgeInsets.top - itemEdgeInsets.bottom
+            let standardHeight: CGFloat
+            if let tabBarHeight = tabBarHeight, tabBarHeight > 0 {
+                standardHeight = tabBarHeight - itemEdgeInsets.top - itemEdgeInsets.bottom
+            } else if #available(iOS 11.0, *), safeAreaInsets.bottom > 0 {
+                standardHeight = max(0, availableHeight - safeAreaInsets.bottom)
+            } else {
+                standardHeight = availableHeight
+            }
+            let height = standardHeight > 0 ? standardHeight : availableHeight
             let eachWidth = containers.isEmpty ? 0.0 : width / CGFloat(containers.count)
             for (idx, container) in containers.enumerated(){
                 if idx < refButtons.count {
@@ -303,7 +398,15 @@ internal extension ESTabBar /* Layout */ {
                 break
             }
             let width = bounds.size.width - itemEdgeInsets.left - itemEdgeInsets.right
-            let height = bounds.size.height - y - itemEdgeInsets.bottom
+            let availableHeight = bounds.size.height - y - itemEdgeInsets.bottom
+            let height: CGFloat
+            if let tabBarHeight = tabBarHeight, tabBarHeight > 0 {
+                height = tabBarHeight - y - itemEdgeInsets.bottom
+            } else if safeAreaInsets.bottom > 0 {
+                height = max(0, availableHeight - safeAreaInsets.bottom)
+            } else {
+                height = availableHeight
+            }
             let eachWidth = itemWidth == 0.0 ? (containers.isEmpty ? 0.0 : width / CGFloat(containers.count)) : itemWidth
             let eachSpacing = itemSpacing == 0.0 ? 0.0 : itemSpacing
             
@@ -342,10 +445,21 @@ internal extension ESTabBar /* Actions */ {
             
             if let item = item as? ESTabBarItem {
                 container.addSubview(item.contentView)
+                let isSelected = (customSelectedItem != nil) ? (item == customSelectedItem) : (idx == selectedIndex)
+                if isSelected {
+                    item.contentView.select(animated: false, completion: nil)
+                } else {
+                    item.contentView.deselect(animated: false, completion: nil)
+                }
             }
             if self.isMoreItem(idx), let moreContentView = moreContentView {
                 container.addSubview(moreContentView)
             }
+        }
+        
+        if customSelectedItem == nil, !tabBarItems.isEmpty {
+            let initialIdx = min(max(0, selectedIndex), tabBarItems.count - 1)
+            customSelectedItem = tabBarItems[initialIdx]
         }
         
         self.updateAccessibilityLabels()
@@ -401,7 +515,7 @@ internal extension ESTabBar /* Actions */ {
     
     @objc func select(itemAtIndex idx: Int, animated: Bool) {
         let newIndex = max(0, idx)
-        let currentIndex = (selectedItem != nil) ? (items?.firstIndex(of: selectedItem!) ?? -1) : -1
+        let currentIndex = (customSelectedItem != nil) ? (items?.firstIndex(of: customSelectedItem!) ?? selectedIndex) : selectedIndex
         guard newIndex < items?.count ?? 0, let item = self.items?[newIndex], item.isEnabled == true else {
             return
         }
@@ -427,11 +541,15 @@ internal extension ESTabBar /* Actions */ {
         }
         
         if currentIndex != newIndex {
-            if currentIndex != -1 && currentIndex < items?.count ?? 0{
-                if let currentItem = items?[currentIndex] as? ESTabBarItem {
-                    currentItem.contentView.deselect(animated: animated, completion: nil)
-                } else if self.isMoreItem(currentIndex) {
-                    moreContentView?.deselect(animated: animated, completion: nil)
+            if let items = self.items {
+                for (i, itm) in items.enumerated() {
+                    if i != newIndex {
+                        if let customItem = itm as? ESTabBarItem {
+                            customItem.contentView.deselect(animated: animated, completion: nil)
+                        } else if self.isMoreItem(i) {
+                            moreContentView?.deselect(animated: animated, completion: nil)
+                        }
+                    }
                 }
             }
             if let item = item as? ESTabBarItem {
@@ -469,6 +587,8 @@ internal extension ESTabBar /* Actions */ {
             }
         }
         
+        self.selectedIndex = newIndex
+        self.customSelectedItem = item
         delegate?.tabBar?(self, didSelect: item)
         self.updateAccessibilityLabels()
     }
@@ -483,7 +603,8 @@ internal extension ESTabBar /* Actions */ {
             container.accessibilityIdentifier = item.accessibilityIdentifier
             container.accessibilityTraits = item.accessibilityTraits
             
-            if item == selectedItem {
+            let isCurrentSelected = (item == customSelectedItem) || (item == selectedItem) || (idx == selectedIndex)
+            if isCurrentSelected {
                 container.accessibilityTraits = container.accessibilityTraits.union(.selected)
             }
             
@@ -499,7 +620,7 @@ internal extension ESTabBar /* Actions */ {
                     accessibilityTitle = NSLocalizedString("More_TabBarItem", bundle: Bundle(for:ESTabBarController.self), comment: "")
                 }
                 
-                let formatString = NSLocalizedString(item == selectedItem ? "TabBarItem_Selected_AccessibilityLabel" : "TabBarItem_AccessibilityLabel",
+                let formatString = NSLocalizedString(isCurrentSelected ? "TabBarItem_Selected_AccessibilityLabel" : "TabBarItem_AccessibilityLabel",
                                                      bundle: Bundle(for: ESTabBarController.self),
                                                      comment: "")
                 container.accessibilityLabel = String(format: formatString, accessibilityTitle, idx + 1, tabBarItems.count)

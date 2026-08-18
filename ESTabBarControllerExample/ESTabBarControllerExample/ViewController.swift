@@ -18,6 +18,7 @@ public class ViewController: UIViewController, UITableViewDataSource, UITableVie
 		[
 			"UITabBarController style",
 			"ESTabBarController like system style",
+			"ESTabBarController with liquid glass disabled",
 			"Mix ESTabBar and UITabBar",
 			"UITabBarController style with 'More'",
 			"ESTabBarController style with 'More'",
@@ -59,6 +60,7 @@ public class ViewController: UIViewController, UITableViewDataSource, UITableVie
         [
             "UITabBarController样式",
             "ESTabBarController仿系统样式",
+            "ESTabBarController禁用液态玻璃样式",
             "ESTabBar和UITabBar混合样式",
             "带有'More'的UITabBarController样式",
             "带有'More'的ESTabBarController样式",
@@ -153,18 +155,20 @@ public class ViewController: UIViewController, UITableViewDataSource, UITableVie
             case 1:
                 self.present(ExampleProvider.customStyle(), animated: true, completion: nil)
             case 2:
-                self.present(ExampleProvider.mixtureStyle(), animated: true, completion: nil)
+                self.present(ExampleProvider.customDisabledLiquidGlassStyle(), animated: true, completion: nil)
             case 3:
-                self.present(ExampleProvider.systemMoreStyle(), animated: true, completion: nil)
+                self.present(ExampleProvider.mixtureStyle(), animated: true, completion: nil)
             case 4:
-                self.present(ExampleProvider.customMoreStyle(), animated: true, completion: nil)
+                self.present(ExampleProvider.systemMoreStyle(), animated: true, completion: nil)
             case 5:
-                self.present(ExampleProvider.mixtureMoreStyle(), animated: true, completion: nil)
+                self.present(ExampleProvider.customMoreStyle(), animated: true, completion: nil)
             case 6:
+                self.present(ExampleProvider.mixtureMoreStyle(), animated: true, completion: nil)
+            case 7:
                 let tabBarController = ExampleProvider.systemStyle()
                 self.present(tabBarController, animated: true, completion: nil)
                 tabBarController.selectedIndex = 2
-            case 7:
+            case 8:
                 let tabBarController = ExampleProvider.customStyle()
                 self.present(tabBarController, animated: true, completion: nil)
                 tabBarController.selectedIndex = 2

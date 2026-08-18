@@ -52,6 +52,14 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
     /// Hijack select action.
     open var didHijackHandler: ESTabBarControllerDidHijackHandler?
     
+    /// 是否开启液态玻璃效果，默认为 true。
+    /// Whether liquid glass effect is enabled, default is true.
+    open var isLiquidGlassEnabled: Bool = true {
+        didSet {
+            (tabBar as? ESTabBar)?.isLiquidGlassEnabled = isLiquidGlassEnabled
+        }
+    }
+    
     /// Observer tabBarController's selectedViewController. change its selection when it will-set.
     open override var selectedViewController: UIViewController? {
         willSet {
@@ -94,6 +102,7 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
             tabBar.delegate = self
             tabBar.customDelegate = self
             tabBar.tabBarController = self
+            tabBar.isLiquidGlassEnabled = self.isLiquidGlassEnabled
             return tabBar
         }()
         self.setValue(tabBar, forKey: "tabBar")
