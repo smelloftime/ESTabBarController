@@ -181,38 +181,79 @@ open class ESTabBar: UITabBar {
 
 internal extension ESTabBar /* Layout */ {
     
+    private func isSystemTabBarButton(_ view: UIView) -> Bool {
+        let className = NSStringFromClass(type(of: view))
+        return className.contains("TabBarButton") || className.contains("TabButton")
+    }
+
+    private func findSystemButtonGroups() -> [[UIView]] {
+        var parentViews = [UIView]()
+        func findParents(in view: UIView) {
+            var hasSystemButtonChild = false
+            for subview in view.subviews {
+                if isSystemTabBarButton(subview) {
+                    hasSystemButtonChild = true
+                } else if !(subview is ESTabBarItemContainer) {
+                    findParents(in: subview)
+                }
+            }
+            if hasSystemButtonChild {
+                parentViews.append(view)
+            }
+        }
+        findParents(in: self)
+        
+        var groups = [[UIView]]()
+        for parent in parentViews {
+            let buttons = parent.subviews.filter { isSystemTabBarButton($0) }
+                .sorted { $0.frame.origin.x < $1.frame.origin.x }
+            if !buttons.isEmpty {
+                groups.append(buttons)
+            }
+        }
+        return groups
+    }
+    
+    private func findReferenceSystemButtons(from groups: [[UIView]]) -> [UIView] {
+        for group in groups {
+            if let first = group.first, let parent = first.superview {
+                let parentName = NSStringFromClass(type(of: parent))
+                if !parentName.contains("Selected") {
+                    return group
+                }
+            }
+        }
+        return groups.first ?? []
+    }
+    
     func updateLayout() {
         guard let tabBarItems = self.items else {
             ESTabBarController.printError("empty items")
             return
         }
         
-        let tabBarButtons = subviews.filter { subview -> Bool in
-            if let cls = NSClassFromString("UITabBarButton") {
-                return subview.isKind(of: cls)
-            }
-            return false
-            } .sorted { (subview1, subview2) -> Bool in
-                return subview1.frame.origin.x < subview2.frame.origin.x
-        }
+        let buttonGroups = findSystemButtonGroups()
         
         if isCustomizing {
-            for (idx, _) in tabBarItems.enumerated() {
-                tabBarButtons[idx].isHidden = false
-                moreContentView?.isHidden = true
+            for group in buttonGroups {
+                for (idx, btn) in group.enumerated() {
+                    if idx < tabBarItems.count {
+                        btn.isHidden = false
+                    }
+                }
             }
+            moreContentView?.isHidden = true
             for (_, container) in containers.enumerated(){
                 container.isHidden = true
             }
         } else {
-            for (idx, item) in tabBarItems.enumerated() {
-                if let _ = item as? ESTabBarItem {
-                    tabBarButtons[idx].isHidden = true
-                } else {
-                    tabBarButtons[idx].isHidden = false
-                }
-                if isMoreItem(idx), let _ = moreContentView {
-                    tabBarButtons[idx].isHidden = true
+            for group in buttonGroups {
+                for (idx, btn) in group.enumerated() {
+                    if idx < tabBarItems.count {
+                        let item = tabBarItems[idx]
+                        let shouldHide = (item is ESTabBarItem) || (isMoreItem(idx) && moreContentView != nil)
+                        btn.isHidden = shouldHide
+                    }
                 }
             }
             for (_, container) in containers.enumerated(){
@@ -232,9 +273,21 @@ internal extension ESTabBar /* Layout */ {
         
         if layoutBaseSystem {
             // System itemPositioning
+            let refButtons = findReferenceSystemButtons(from: buttonGroups)
+            let width = bounds.size.width - itemEdgeInsets.left - itemEdgeInsets.right
+            let height = bounds.size.height - itemEdgeInsets.top - itemEdgeInsets.bottom
+            let eachWidth = containers.isEmpty ? 0.0 : width / CGFloat(containers.count)
             for (idx, container) in containers.enumerated(){
-                if !tabBarButtons[idx].frame.isEmpty {
-                    container.frame = tabBarButtons[idx].frame
+                if idx < refButtons.count {
+                    let btn = refButtons[idx]
+                    let frame = btn.superview == self ? btn.frame : btn.convert(btn.bounds, to: self)
+                    if !frame.isEmpty {
+                        container.frame = frame
+                        continue
+                    }
+                }
+                if eachWidth > 0.0 && height > 0.0 {
+                    container.frame = CGRect(x: itemEdgeInsets.left + CGFloat(idx) * eachWidth, y: itemEdgeInsets.top, width: eachWidth, height: height)
                 }
             }
         } else {
@@ -251,7 +304,7 @@ internal extension ESTabBar /* Layout */ {
             }
             let width = bounds.size.width - itemEdgeInsets.left - itemEdgeInsets.right
             let height = bounds.size.height - y - itemEdgeInsets.bottom
-            let eachWidth = itemWidth == 0.0 ? width / CGFloat(containers.count) : itemWidth
+            let eachWidth = itemWidth == 0.0 ? (containers.isEmpty ? 0.0 : width / CGFloat(containers.count)) : itemWidth
             let eachSpacing = itemSpacing == 0.0 ? 0.0 : itemSpacing
             
             for container in containers {

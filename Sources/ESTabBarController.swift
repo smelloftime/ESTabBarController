@@ -104,12 +104,13 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
         guard let idx = tabBar.items?.firstIndex(of: item) else {
             return;
         }
-        if idx == tabBar.items!.count - 1, ESTabBarController.isShowingMore(self) {
+        if let items = tabBar.items, idx == items.count - 1, ESTabBarController.isShowingMore(self) {
             ignoreNextSelection = true
             selectedViewController = moreNavigationController
             return;
         }
-        if let vc = viewControllers?[idx] {
+        if let viewControllers = viewControllers, idx < viewControllers.count {
+            let vc = viewControllers[idx]
             ignoreNextSelection = true
             selectedIndex = idx
             delegate?.tabBarController?(self, didSelect: vc)
@@ -130,21 +131,24 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
     
     // MARK: - ESTabBar delegate
     internal func tabBar(_ tabBar: UITabBar, shouldSelect item: UITabBarItem) -> Bool {
-        if let idx = tabBar.items?.firstIndex(of: item), let vc = viewControllers?[idx] {
+        if let idx = tabBar.items?.firstIndex(of: item), let viewControllers = viewControllers, idx < viewControllers.count {
+            let vc = viewControllers[idx]
             return delegate?.tabBarController?(self, shouldSelect: vc) ?? true
         }
         return true
     }
     
     internal func tabBar(_ tabBar: UITabBar, shouldHijack item: UITabBarItem) -> Bool {
-        if let idx = tabBar.items?.firstIndex(of: item), let vc = viewControllers?[idx] {
+        if let idx = tabBar.items?.firstIndex(of: item), let viewControllers = viewControllers, idx < viewControllers.count {
+            let vc = viewControllers[idx]
             return shouldHijackHandler?(self, vc, idx) ?? false
         }
         return false
     }
     
     internal func tabBar(_ tabBar: UITabBar, didHijack item: UITabBarItem) {
-        if let idx = tabBar.items?.firstIndex(of: item), let vc = viewControllers?[idx] {
+        if let idx = tabBar.items?.firstIndex(of: item), let viewControllers = viewControllers, idx < viewControllers.count {
+            let vc = viewControllers[idx]
             didHijackHandler?(self, vc, idx)
         }
     }
