@@ -46,6 +46,12 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
 
     /// Ignore next selection or not.
     fileprivate var ignoreNextSelection = false
+    /// 上一次真正被选中的 tab。hijack 项不应成为 selectedIndex。
+    /// Last tab that was actually selected. A hijacked item must not become selectedIndex.
+    fileprivate var lastNonHijackedIndex: Int = 0
+    /// 同一次点击里，自定义容器和系统 UITabBar 都可能回调，避免 didHijack 触发两次。
+    /// Custom containers and the system UITabBar may both fire for one tap; don't hijack twice.
+    fileprivate var didHijackThisEvent = false
 
     /// Should hijack select action or not.
     open var shouldHijackHandler: ESTabBarControllerShouldHijackHandler?
@@ -61,36 +67,49 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
     }
     
     /// Observer tabBarController's selectedViewController. change its selection when it will-set.
+    /// iOS 26/27 上系统仍可能把 selectedViewController 指到 hijack 项，这里直接拒绝。
     open override var selectedViewController: UIViewController? {
-        willSet {
+        get { super.selectedViewController }
+        set {
             guard let newValue = newValue else {
-                // if newValue == nil ...
+                super.selectedViewController = nil
                 return
             }
-            guard !ignoreNextSelection else {
+            if isHijackViewController(newValue) {
                 ignoreNextSelection = false
                 return
             }
-            guard let tabBar = self.tabBar as? ESTabBar, let items = tabBar.items, let index = viewControllers?.firstIndex(of: newValue) else {
-                return
+            if ignoreNextSelection {
+                ignoreNextSelection = false
+            } else if let tabBar = self.tabBar as? ESTabBar, let items = tabBar.items,
+                      let index = viewControllers?.firstIndex(of: newValue) {
+                let value = (ESTabBarController.isShowingMore(self) && index > items.count - 1) ? items.count - 1 : index
+                tabBar.select(itemAtIndex: value, animated: false)
             }
-            let value = (ESTabBarController.isShowingMore(self) && index > items.count - 1) ? items.count - 1 : index
-            tabBar.select(itemAtIndex: value, animated: false)
+            super.selectedViewController = newValue
+            if let index = viewControllers?.firstIndex(of: newValue) {
+                lastNonHijackedIndex = index
+            }
         }
     }
     
     /// Observer tabBarController's selectedIndex. change its selection when it will-set.
+    /// iOS 26/27 上系统仍可能把 selectedIndex 设到 hijack 项，这里直接拒绝，避免内容页切到占位 VC。
     open override var selectedIndex: Int {
-        willSet {
-            guard !ignoreNextSelection else {
+        get { super.selectedIndex }
+        set {
+            if isHijackIndex(newValue) {
                 ignoreNextSelection = false
                 return
             }
-            guard let tabBar = self.tabBar as? ESTabBar, let items = tabBar.items else {
-                return
+            if ignoreNextSelection {
+                ignoreNextSelection = false
+            } else if let tabBar = self.tabBar as? ESTabBar, let items = tabBar.items {
+                let value = (ESTabBarController.isShowingMore(self) && newValue > items.count - 1) ? items.count - 1 : newValue
+                tabBar.select(itemAtIndex: value, animated: false)
             }
-            let value = (ESTabBarController.isShowingMore(self) && newValue > items.count - 1) ? items.count - 1 : newValue
-            tabBar.select(itemAtIndex: value, animated: false)
+            super.selectedIndex = newValue
+            lastNonHijackedIndex = newValue
         }
     }
     
@@ -120,6 +139,15 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
         }
         if let viewControllers = viewControllers, idx < viewControllers.count {
             let vc = viewControllers[idx]
+            // iOS 26/27：系统 UITabBar 在自定义容器劫持之后仍会回调 didSelect。
+            // hijack 语义是「不选中该 tab」，因此不能改 selectedIndex。
+            if shouldHijackHandler?(self, vc, idx) == true {
+                if !didHijackThisEvent {
+                    self.tabBar(tabBar, didHijack: item)
+                }
+                restoreSelectionIfHijacked()
+                return
+            }
             ignoreNextSelection = true
             selectedIndex = idx
             delegate?.tabBarController?(self, didSelect: vc)
@@ -156,10 +184,36 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
     }
     
     internal func tabBar(_ tabBar: UITabBar, didHijack item: UITabBarItem) {
+        guard !didHijackThisEvent else { return }
+        didHijackThisEvent = true
         if let idx = tabBar.items?.firstIndex(of: item), let viewControllers = viewControllers, idx < viewControllers.count {
             let vc = viewControllers[idx]
             didHijackHandler?(self, vc, idx)
         }
+        // 系统可能在 didSelect 返回之后才真正切走 selectedIndex，下一拍再兜底切回。
+        DispatchQueue.main.async { [weak self] in
+            self?.didHijackThisEvent = false
+            self?.restoreSelectionIfHijacked()
+        }
+    }
+    
+    private func isHijackIndex(_ index: Int) -> Bool {
+        guard let viewControllers, index >= 0, index < viewControllers.count else { return false }
+        return shouldHijackHandler?(self, viewControllers[index], index) ?? false
+    }
+    
+    private func isHijackViewController(_ viewController: UIViewController) -> Bool {
+        guard let index = viewControllers?.firstIndex(of: viewController) else { return false }
+        return isHijackIndex(index)
+    }
+    
+    /// 若内容页已被切到 hijack 占位 VC，则切回上一个真实 tab。
+    private func restoreSelectionIfHijacked() {
+        guard isHijackIndex(selectedIndex) else { return }
+        let restore = lastNonHijackedIndex
+        guard restore != selectedIndex, !isHijackIndex(restore) else { return }
+        ignoreNextSelection = true
+        selectedIndex = restore
     }
     
 }
