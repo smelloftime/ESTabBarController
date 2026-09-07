@@ -49,9 +49,10 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
     /// 上一次真正被选中的 tab。hijack 项不应成为 selectedIndex。
     /// Last tab that was actually selected. A hijacked item must not become selectedIndex.
     fileprivate var lastNonHijackedIndex: Int = 0
-    /// 同一次点击里，自定义容器和系统 UITabBar 都可能回调，避免 didHijack 触发两次。
-    /// Custom containers and the system UITabBar may both fire for one tap; don't hijack twice.
-    fileprivate var didHijackThisEvent = false
+    /// 同一次点击里，自定义容器和系统 UITabBar 都可能回调，记录已劫持的具体 item，
+    /// 避免重复触发，同时不影响同一 RunLoop 内其他 hijack item。
+    /// Custom containers and the system UITabBar may both fire for one tap.
+    fileprivate weak var hijackedItemInCurrentEvent: UITabBarItem?
 
     /// Should hijack select action or not.
     open var shouldHijackHandler: ESTabBarControllerShouldHijackHandler?
@@ -142,7 +143,7 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
             // iOS 26/27：系统 UITabBar 在自定义容器劫持之后仍会回调 didSelect。
             // hijack 语义是「不选中该 tab」，因此不能改 selectedIndex。
             if shouldHijackHandler?(self, vc, idx) == true {
-                if !didHijackThisEvent {
+                if hijackedItemInCurrentEvent !== item {
                     self.tabBar(tabBar, didHijack: item)
                 }
                 restoreSelectionIfHijacked()
@@ -184,15 +185,17 @@ open class ESTabBarController: UITabBarController, ESTabBarDelegate {
     }
     
     internal func tabBar(_ tabBar: UITabBar, didHijack item: UITabBarItem) {
-        guard !didHijackThisEvent else { return }
-        didHijackThisEvent = true
+        guard hijackedItemInCurrentEvent !== item else { return }
+        hijackedItemInCurrentEvent = item
         if let idx = tabBar.items?.firstIndex(of: item), let viewControllers = viewControllers, idx < viewControllers.count {
             let vc = viewControllers[idx]
             didHijackHandler?(self, vc, idx)
         }
         // 系统可能在 didSelect 返回之后才真正切走 selectedIndex，下一拍再兜底切回。
         DispatchQueue.main.async { [weak self] in
-            self?.didHijackThisEvent = false
+            if self?.hijackedItemInCurrentEvent === item {
+                self?.hijackedItemInCurrentEvent = nil
+            }
             self?.restoreSelectionIfHijacked()
         }
     }

@@ -46,7 +46,13 @@ public enum ESTabBarItemPositioning : Int {
     case fillIncludeSeparator
 }
 
-
+/// 自定义 item 的布局宽度。
+public enum ESTabBarItemLayoutWidth: Equatable {
+    /// 固定宽度。所有固定项超出可用区域时会按比例缩放。
+    case fixed(CGFloat)
+    /// 平均分配扣除固定项之后的剩余宽度。
+    case flexible
+}
 
 /// 对UITabBarDelegate进行扩展，以支持UITabBarControllerDelegate的相关方法桥接
 internal protocol ESTabBarDelegate: NSObjectProtocol {
@@ -93,9 +99,20 @@ open class ESTabBar: UITabBar {
             setNeedsLayout()
         }
     }
-    
+
     /// tabBar中items布局偏移量
     public var itemEdgeInsets = UIEdgeInsets.zero
+    /// 每个自定义 item 的布局宽度，数组数量必须与 items 一致。
+    /// 不设置或数量不匹配时保持系统默认布局规则。
+    ///
+    /// Custom layout widths for item containers. The count must match `items`.
+    /// When nil or invalid, the system's default layout behavior is preserved.
+    open var itemLayoutWidths: [ESTabBarItemLayoutWidth]? {
+        didSet {
+            didReportInvalidItemLayoutWidths = false
+            setNeedsLayout()
+        }
+    }
     /// 是否开启液态玻璃效果，默认为 true。若为 false 则禁用液态玻璃效果并使用经典 TabBar 样式。
     /// Whether liquid glass effect is enabled, default is true. If false, liquid glass effect is disabled and classic TabBar style is used.
     open var isLiquidGlassEnabled: Bool = true {
@@ -127,6 +144,8 @@ open class ESTabBar: UITabBar {
     }
     /// tabBar自定义item的容器view
     internal var containers = [ESTabBarItemContainer]()
+    /// 避免 layoutSubviews 重复输出相同的配置错误。
+    private var didReportInvalidItemLayoutWidths = false
     /// 缓存当前选中的 index
     internal var selectedIndex: Int = 0
     /// 缓存当前选中的 item
@@ -140,6 +159,7 @@ open class ESTabBar: UITabBar {
     
     open override var items: [UITabBarItem]? {
         didSet {
+            didReportInvalidItemLayoutWidths = false
             self.reload()
         }
     }
@@ -358,32 +378,27 @@ internal extension ESTabBar /* Layout */ {
         }
         
         if layoutBaseSystem {
-            // System itemPositioning
-            let refButtons = isLiquidGlassEnabled ? findReferenceSystemButtons(from: buttonGroups) : []
-            let width = bounds.size.width - itemEdgeInsets.left - itemEdgeInsets.right
-            let availableHeight = bounds.size.height - itemEdgeInsets.top - itemEdgeInsets.bottom
-            let standardHeight: CGFloat
-            if let tabBarHeight = tabBarHeight, tabBarHeight > 0 {
-                standardHeight = tabBarHeight - itemEdgeInsets.top - itemEdgeInsets.bottom
-            } else if #available(iOS 11.0, *), safeAreaInsets.bottom > 0 {
-                standardHeight = max(0, availableHeight - safeAreaInsets.bottom)
+            // 不要逐个拷贝系统 UITabBarButton.frame：iOS 26/27 选中项会变宽。
+            // 在系统 item 的整体区域内按配置宽度布局；未配置时保持等宽。
+            let refButtons = findReferenceSystemButtons(from: buttonGroups)
+            // 指定自定义宽度时使用 TabBar 的完整可用区域，不能沿用系统按钮区域，
+            // 否则系统预留的左右边距会压缩普通 item，无法铺满剩余空间。
+            if let widths = validItemLayoutWidths {
+                layoutContainers(in: fullContentLayoutRect(), widths: widths)
+            } else if isLiquidGlassEnabled {
+                if #available(iOS 26.0, *) {
+                    // iOS 26 的系统选中项宽度会变化，只能使用整体区域等分。
+                    layoutContainersEqually(in: contentLayoutRect(referenceButtons: refButtons))
+                } else {
+                    // 旧系统保持原有行为，包括系统的 itemWidth、itemSpacing 和 centered 布局。
+                    layoutContainersUsingSystemFrames(
+                        refButtons,
+                        fallback: fullContentLayoutRect()
+                    )
+                }
             } else {
-                standardHeight = availableHeight
-            }
-            let height = standardHeight > 0 ? standardHeight : availableHeight
-            let eachWidth = containers.isEmpty ? 0.0 : width / CGFloat(containers.count)
-            for (idx, container) in containers.enumerated(){
-                if idx < refButtons.count {
-                    let btn = refButtons[idx]
-                    let frame = btn.superview == self ? btn.frame : btn.convert(btn.bounds, to: self)
-                    if !frame.isEmpty {
-                        container.frame = frame
-                        continue
-                    }
-                }
-                if eachWidth > 0.0 && height > 0.0 {
-                    container.frame = CGRect(x: itemEdgeInsets.left + CGFloat(idx) * eachWidth, y: itemEdgeInsets.top, width: eachWidth, height: height)
-                }
+                // 保持关闭 Liquid Glass 时的旧行为：所有 item 铺满完整可用宽度。
+                layoutContainersEqually(in: fullContentLayoutRect())
             }
         } else {
             // Custom itemPositioning
@@ -410,12 +425,180 @@ internal extension ESTabBar /* Layout */ {
             let eachWidth = itemWidth == 0.0 ? (containers.isEmpty ? 0.0 : width / CGFloat(containers.count)) : itemWidth
             let eachSpacing = itemSpacing == 0.0 ? 0.0 : itemSpacing
             
-            for container in containers {
-                container.frame = CGRect.init(x: x, y: y, width: eachWidth, height: height)
-                x += eachWidth
-                x += eachSpacing
+            if let widths = validItemLayoutWidths {
+                let rect = CGRect(x: itemEdgeInsets.left, y: y, width: width, height: height)
+                layoutContainers(in: rect, widths: widths)
+            } else {
+                for container in containers {
+                    container.frame = CGRect.init(x: x, y: y, width: eachWidth, height: height)
+                    x += eachWidth
+                    x += eachSpacing
+                }
             }
         }
+    }
+
+    /// TabBar 去除显式边距后的完整布局区域。
+    private func fullContentLayoutRect() -> CGRect {
+        let x = itemEdgeInsets.left
+        let width = max(0, bounds.width - itemEdgeInsets.left - itemEdgeInsets.right)
+        return CGRect(x: x, y: itemEdgeInsets.top, width: width, height: itemSlotHeight())
+    }
+
+    private var validItemLayoutWidths: [ESTabBarItemLayoutWidth]? {
+        guard let itemLayoutWidths else { return nil }
+        guard itemLayoutWidths.count == containers.count else {
+            if !didReportInvalidItemLayoutWidths {
+                ESTabBarController.printError("itemLayoutWidths count must match items count")
+                didReportInvalidItemLayoutWidths = true
+            }
+            return nil
+        }
+        didReportInvalidItemLayoutWidths = false
+        return itemLayoutWidths
+    }
+
+    private func layoutContainersEqually(in rect: CGRect) {
+        guard !containers.isEmpty, rect.width > 0, rect.height > 0 else { return }
+        let width = rect.width / CGFloat(containers.count)
+        var x = rect.minX
+        for container in containers {
+            container.frame = CGRect(x: x, y: rect.minY, width: width, height: rect.height)
+            x += width
+        }
+    }
+
+    private func layoutContainersUsingSystemFrames(_ buttons: [UIView], fallback rect: CGRect) {
+        guard !containers.isEmpty else { return }
+        let fallbackWidth = rect.width / CGFloat(containers.count)
+        for (index, container) in containers.enumerated() {
+            if index < buttons.count {
+                let button = buttons[index]
+                let frame = button.superview == self
+                    ? button.frame
+                    : button.convert(button.bounds, to: self)
+                if !frame.isEmpty {
+                    container.frame = frame
+                    continue
+                }
+            }
+            container.frame = CGRect(
+                x: rect.minX + CGFloat(index) * fallbackWidth,
+                y: rect.minY,
+                width: fallbackWidth,
+                height: rect.height
+            )
+        }
+    }
+
+    /// 按固定宽度与弹性宽度布局。
+    private func layoutContainers(in rect: CGRect, widths: [ESTabBarItemLayoutWidth]) {
+        guard !containers.isEmpty, rect.width > 0, rect.height > 0 else { return }
+
+        let fixedWidth = widths.reduce(CGFloat.zero) { result, width in
+            guard case let .fixed(value) = width else { return result }
+            return result + max(0, value)
+        }
+        let flexibleCount = widths.reduce(0) { result, width in
+            if case .flexible = width { return result + 1 }
+            return result
+        }
+
+        // 固定项已经占满可用区域时，保留所有 item 的可点击区域并退回等宽。
+        if flexibleCount > 0, fixedWidth >= rect.width {
+            layoutContainersEqually(in: rect)
+            return
+        }
+
+        // 全部固定项均为无效宽度时退回等宽。
+        if flexibleCount == 0, fixedWidth == 0 {
+            layoutContainersEqually(in: rect)
+            return
+        }
+
+        let flexibleWidth = flexibleCount > 0
+            ? (rect.width - fixedWidth) / CGFloat(flexibleCount)
+            : 0
+        let scale = flexibleCount == 0 && fixedWidth > rect.width
+            ? rect.width / fixedWidth
+            : 1
+        let renderedFixedWidth = fixedWidth * scale
+        // 全部为固定宽度且总宽不足时，将整组 item 水平居中。
+        var x = flexibleCount == 0
+            ? rect.minX + max(0, rect.width - renderedFixedWidth) / 2
+            : rect.minX
+
+        for (index, container) in containers.enumerated() {
+            let width: CGFloat
+            switch widths[index] {
+            case let .fixed(value):
+                width = max(0, value) * scale
+            case .flexible:
+                width = flexibleWidth
+            }
+            container.frame = CGRect(x: x, y: rect.minY, width: width, height: rect.height)
+            x += width
+        }
+    }
+
+    /// 自定义容器的水平布局区域：优先系统 button 的并集 / Liquid Glass platter，避免跟选中态不等宽的单个 button。
+    private func contentLayoutRect(referenceButtons: [UIView]) -> CGRect {
+        let height = itemSlotHeight()
+        let y = itemEdgeInsets.top
+
+        var union: CGRect?
+        for btn in referenceButtons {
+            let frame = btn.superview == self ? btn.frame : btn.convert(btn.bounds, to: self)
+            guard frame.width > 1, frame.height > 1 else { continue }
+            union = union.map { $0.union(frame) } ?? frame
+        }
+        if let union, union.width > 1 {
+            return CGRect(x: union.minX, y: y, width: union.width, height: height)
+        }
+
+        if let platter = tabBarPlatterFrame(), platter.width > 1 {
+            return CGRect(x: platter.minX, y: y, width: platter.width, height: height)
+        }
+
+        var left = itemEdgeInsets.left
+        var right = itemEdgeInsets.right
+        if #available(iOS 26.0, *) {
+            left = max(left, layoutMargins.left)
+            right = max(right, layoutMargins.right)
+        }
+        let width = max(0, bounds.size.width - left - right)
+        return CGRect(x: left, y: y, width: width, height: height)
+    }
+
+    private func itemSlotHeight() -> CGFloat {
+        let availableHeight = bounds.size.height - itemEdgeInsets.top - itemEdgeInsets.bottom
+        let standardHeight: CGFloat
+        if let tabBarHeight = tabBarHeight, tabBarHeight > 0 {
+            standardHeight = tabBarHeight - itemEdgeInsets.top - itemEdgeInsets.bottom
+        } else if safeAreaInsets.bottom > 0 {
+            standardHeight = max(0, availableHeight - safeAreaInsets.bottom)
+        } else {
+            standardHeight = availableHeight
+        }
+        return standardHeight > 0 ? standardHeight : availableHeight
+    }
+
+    private func tabBarPlatterFrame() -> CGRect? {
+        func findPlatter(in view: UIView) -> UIView? {
+            let className = NSStringFromClass(type(of: view))
+            if className.contains("Platter") {
+                return view
+            }
+            for subview in view.subviews where !(subview is ESTabBarItemContainer) {
+                if let found = findPlatter(in: subview) {
+                    return found
+                }
+            }
+            return nil
+        }
+        guard let platter = findPlatter(in: self) else { return nil }
+        let frame = platter.convert(platter.bounds, to: self)
+        return frame.width > 1 ? frame : nil
     }
 }
 
