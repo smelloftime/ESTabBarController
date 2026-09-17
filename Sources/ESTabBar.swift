@@ -110,6 +110,7 @@ open class ESTabBar: UITabBar {
     open var itemLayoutWidths: [ESTabBarItemLayoutWidth]? {
         didSet {
             didReportInvalidItemLayoutWidths = false
+            updateSelectionGestureRecognizers()
             setNeedsLayout()
         }
     }
@@ -196,6 +197,28 @@ open class ESTabBar: UITabBar {
         super.didAddSubview(subview)
         if !isLiquidGlassEnabled {
             updateLiquidGlassEffect()
+        }
+    }
+
+    open override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            updateSelectionGestureRecognizers()
+            if !isLiquidGlassEnabled {
+                updateLiquidGlassEffect()
+            }
+        }
+    }
+
+    open override func addGestureRecognizer(_ gestureRecognizer: UIGestureRecognizer) {
+        super.addGestureRecognizer(gestureRecognizer)
+        let shouldDisable = !isLiquidGlassEnabled || validItemLayoutWidths != nil
+        if shouldDisable {
+            let className = NSStringFromClass(type(of: gestureRecognizer))
+            if className.contains("ContinuousSelection") || className.contains("Selection") {
+                gestureRecognizer.isEnabled = false
+                gestureRecognizer.cancelsTouchesInView = false
+            }
         }
     }
 
@@ -304,17 +327,36 @@ internal extension ESTabBar /* Layout */ {
         return groups.first ?? []
     }
     
+    private func updateSelectionGestureRecognizers() {
+        let shouldDisable = !isLiquidGlassEnabled || validItemLayoutWidths != nil
+        for gesture in (self.gestureRecognizers ?? []) {
+            let className = NSStringFromClass(type(of: gesture))
+            if className.contains("ContinuousSelection") || className.contains("Selection") {
+                if shouldDisable {
+                    gesture.isEnabled = false
+                    gesture.cancelsTouchesInView = false
+                } else {
+                    gesture.isEnabled = true
+                }
+            }
+        }
+    }
+
     private func updateLiquidGlassEffect() {
+        updateSelectionGestureRecognizers()
         func processView(_ view: UIView) {
             let className = NSStringFromClass(type(of: view))
-            if className.contains("Platter") || className.contains("Liquid") || className.contains("Lens") || className.contains("TabSelection") || className.contains("ClearGlass") || className.contains("DestOut") {
+            if className.contains("Platter") || className.contains("Liquid") || className.contains("Lens") || className.contains("Selection") || className.contains("Floating") || className.contains("ClearGlass") || className.contains("DestOut") {
                 view.isHidden = !isLiquidGlassEnabled
                 view.alpha = isLiquidGlassEnabled ? 1.0 : 0.0
                 view.isUserInteractionEnabled = isLiquidGlassEnabled
                 if !isLiquidGlassEnabled {
                     view.layer.opacity = 0.0
                     view.layer.isHidden = true
-                    view.gestureRecognizers?.forEach { $0.isEnabled = false }
+                    view.gestureRecognizers?.forEach {
+                        $0.isEnabled = false
+                        $0.cancelsTouchesInView = false
+                    }
                 } else {
                     view.layer.opacity = 1.0
                     view.layer.isHidden = false
